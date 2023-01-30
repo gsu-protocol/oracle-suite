@@ -15,7 +15,7 @@ in buildGoModule {
   version = pkgs.lib.fileContents ./version;
   src = ./.;
   vendorSha256 = "inDtrWyJ7Aqzv//EEsSewIQBye8O3D3pMxVqRCrzgwM=";
-  subPackages = [ "cmd/gofer", "cmd/spire" ];
+  subPackages = [ "cmd/gofer" "cmd/spire" ];
   postConfigure = "export CGO_ENABLED=0";
   postInstall = "cp ./config.json $out";
 }
