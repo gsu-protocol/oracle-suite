@@ -26,7 +26,7 @@ import (
 )
 
 // GSU URL
-const gsuURL = "https://goerli.gsu.io/Umbraco/Api/Rates/GSU/?symbol=%s"
+const gsuURL = "https://api.gsucoin.app/Products/GSULive/?symbol=%s"
 const wad = 1000000000000000000
 
 type gsuResponse struct {
@@ -117,35 +117,35 @@ func (h *GSU) newPrice(pair Pair, resp gsuResponse) (Price, error) {
 	z := new(big.Int).SetUint64(0)
 
 	// Parsing price from string.
-	v, ok := new(big.Int).SetString(resp.Price,10)
+	v, ok := new(big.Int).SetString(resp.price,10)
 	if !ok {
 		return Price{}, fmt.Errorf("failed to parse price from gsu exchange")
 	}
 	f := new(big.Float).SetInt(v)
-	price, _ := f.Quo(f, e).Float64()
+	price, _ := f.Float64()
 
 	//ask
-	v, ok = new(big.Int).SetString(resp.Ask,10)
+	v, ok = new(big.Int).SetString(resp.ask,10)
 	ask := float64(0)
 	if ok && v.Cmp(z) != 0 {
 		f = new(big.Float).SetInt(v)
-		ask, _ = f.Quo(f, e).Float64()
+		ask, _ = f.Float64()
 	}
 
 	//bid
-	v, ok = new(big.Int).SetString(resp.Bid,10)
+	v, ok = new(big.Int).SetString(resp.bid,10)
 	bid := float64(0)
 	if ok && v.Cmp(z) != 0 {
 		f = new(big.Float).SetInt(v)
-		bid, _ = f.Quo(f, e).Float64()
+		bid, _ = f.Float64()
 	}
 
 	//vol
-	v, ok = new(big.Int).SetString(resp.Bid,10)
+	v, ok = new(big.Int).SetString(resp.volume,10)
 	vol := float64(0)
 	if ok && v.Cmp(z) != 0 {
 		f = new(big.Float).SetInt(v)
-		vol, _ = f.Quo(f, e).Float64()
+		vol, _ = f.Float64()
 	}
 
 	// Building Price.
