@@ -1,8 +1,30 @@
 version: "3.8"
 services:
   gofer:
-    image: ghcr.io/chronicleprotocol/oracle-suite:dev
     build:
       context: "."
+      dockerfile: Dockerfile-gofer
     entrypoint: [ "/usr/local/bin/gofer" ]
     command: [ "agent", "-v", "info" ]
+    volumes:
+      - /home/usman/oracle-suite/config/gofer.json:/root/config.json
+      - /home/usman/.ethereum/keystore/:/home/usman/.ethereum/keystore/
+      - /home/usman/oracle-suite/config/spire1.json:/root/spire.json 
+
+
+  spire_feed:
+    build:
+      context: "."
+      dockerfile: Dockerfile-spire    
+    container_name: spire_feed.local
+    ports:
+      - "8101:8101"
+      - "9101:9101"
+    # entrypoint: [ "/usr/local/bin/spire" ]
+    command: [ "-c", "/home/usman/oracle-suite/config/spire1.json", "agent", "--log.format", "text", "--log.verbosity", "debug" ]
+    environment:
+      - SPIRE_CONFIG="/home/usman/oracle-suite/config/spire1.json"
+    volumes:
+      - /home/usman/oracle-suite/config/spire1.json:/home/usman/oracle-suite/config/spire1.json
+      - /home/usman/.ethereum/keystore/:/home/usman/.ethereum/keystore/
+      - /home/usman/oracle-suite/config/spire1.json:/root/spire.json 
