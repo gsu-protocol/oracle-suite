@@ -268,6 +268,8 @@ func DefaultOriginSet(pool query.WorkerPool) *Set {
 		"gateio":        NewBaseExchangeHandler(Gateio{WorkerPool: pool}, nil),
 		"gemini":        NewBaseExchangeHandler(Gemini{WorkerPool: pool}, nil),
 		"gsu":           NewBaseExchangeHandler(GSU{WorkerPool: pool}, nil),
+		"gsu1":           NewBaseExchangeHandler(GSU1{WorkerPool: pool}, nil),
+		"gsu2":           NewBaseExchangeHandler(GSU2{WorkerPool: pool}, nil),
 		"hitbtc":        NewBaseExchangeHandler(Hitbtc{WorkerPool: pool}, nil),
 		"huobi":         NewBaseExchangeHandler(Huobi{WorkerPool: pool}, nil),
 		"kraken":        NewBaseExchangeHandler(Kraken{WorkerPool: pool}, nil),

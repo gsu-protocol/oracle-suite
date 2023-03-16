@@ -128,6 +128,10 @@ func NewHandler(
 		return origins.NewBaseExchangeHandler(origins.Gemini{WorkerPool: wp}, aliases), nil
 	case "gsu":
 		return origins.NewBaseExchangeHandler(origins.GSU{WorkerPool: wp}, aliases), nil
+	case "gsu1":
+		return origins.NewBaseExchangeHandler(origins.GSU1{WorkerPool: wp}, aliases), nil
+	case "gsu2":
+		return origins.NewBaseExchangeHandler(origins.GSU2{WorkerPool: wp}, aliases), nil
 	case "hitbtc":
 		return origins.NewBaseExchangeHandler(origins.Hitbtc{WorkerPool: wp, BaseURL: baseURL}, aliases), nil
 	case "huobi":
