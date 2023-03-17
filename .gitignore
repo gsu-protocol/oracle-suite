@@ -30,5 +30,3 @@ node_modules
 
 # Go Workspaces
 go.work
-
-gofer.json
