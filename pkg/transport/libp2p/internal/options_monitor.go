@@ -19,7 +19,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/libp2p/go-libp2p-core/network"
+	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/multiformats/go-multiaddr"
 
 	"github.com/chronicleprotocol/oracle-suite/pkg/transport/libp2p/internal/sets"
@@ -39,7 +39,7 @@ func (n *monitorNotifee) Listen(network.Network, multiaddr.Multiaddr) {}
 func (n *monitorNotifee) ListenClose(network.Network, multiaddr.Multiaddr) {}
 
 // Connected implements the network.Notifiee interface.
-func (n *monitorNotifee) Connected(_ network.Network, conn network.Conn) {
+func (n *monitorNotifee) Connected(_ network.Network, _ network.Conn) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 
@@ -49,7 +49,7 @@ func (n *monitorNotifee) Connected(_ network.Network, conn network.Conn) {
 }
 
 // Disconnected implements the network.Notifiee interface.
-func (n *monitorNotifee) Disconnected(_ network.Network, conn network.Conn) {
+func (n *monitorNotifee) Disconnected(_ network.Network, _ network.Conn) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 

@@ -19,17 +19,16 @@ import (
 	"bytes"
 	"errors"
 
-	"github.com/libp2p/go-libp2p-core/crypto"
-	cryptoPB "github.com/libp2p/go-libp2p-core/crypto/pb"
-
-	"github.com/chronicleprotocol/oracle-suite/pkg/ethereum"
+	"github.com/defiweb/go-eth/wallet"
+	"github.com/libp2p/go-libp2p/core/crypto"
+	cryptoPB "github.com/libp2p/go-libp2p/core/crypto/pb"
 )
 
 type PrivKey struct {
-	signer ethereum.Signer
+	signer wallet.Key
 }
 
-func NewPrivKey(signer ethereum.Signer) crypto.PrivKey {
+func NewPrivKey(signer wallet.Key) crypto.PrivKey {
 	return &PrivKey{
 		signer: signer,
 	}
@@ -45,7 +44,6 @@ func (p *PrivKey) Equals(key crypto.Key) bool {
 	if p.Type() != key.Type() {
 		return false
 	}
-
 	a, err := p.Raw()
 	if err != nil {
 		return false
@@ -54,7 +52,6 @@ func (p *PrivKey) Equals(key crypto.Key) bool {
 	if err != nil {
 		return false
 	}
-
 	return bytes.Equal(a, b)
 }
 
@@ -70,7 +67,7 @@ func (p *PrivKey) Type() cryptoPB.KeyType {
 
 // Sign implements the crypto.PrivateKey interface.
 func (p *PrivKey) Sign(bytes []byte) ([]byte, error) {
-	s, err := p.signer.Signature(bytes)
+	s, err := p.signer.SignMessage(bytes)
 	if err != nil {
 		return nil, err
 	}
@@ -84,6 +81,6 @@ func (p *PrivKey) GetPublic() crypto.PubKey {
 
 // UnmarshalEthPrivateKey should return private key from input bytes, but this
 // not supported for ethereum keys.
-func UnmarshalEthPrivateKey(data []byte) (crypto.PrivKey, error) {
+func UnmarshalEthPrivateKey(_ []byte) (crypto.PrivKey, error) {
 	return nil, errors.New("eth key type does not support unmarshalling")
 }

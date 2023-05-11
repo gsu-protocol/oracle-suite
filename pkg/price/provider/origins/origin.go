@@ -21,10 +21,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/chronicleprotocol/oracle-suite/pkg/util/query"
+	"github.com/defiweb/go-eth/types"
 
-	"github.com/chronicleprotocol/oracle-suite/pkg/ethereum"
+	"github.com/chronicleprotocol/oracle-suite/pkg/util/query"
 )
+
+const ether = 1e18
 
 // Handler is interface that all Origin API handlers should implement.
 type Handler interface {
@@ -80,12 +82,12 @@ func (c ContractAddresses) ByPair(p Pair) (string, bool, bool) {
 	return contract, false, ok
 }
 
-func (c ContractAddresses) AddressByPair(pair Pair) (ethereum.Address, bool, error) {
+func (c ContractAddresses) AddressByPair(pair Pair) (types.Address, bool, error) {
 	contract, inverted, ok := c.ByPair(pair)
 	if !ok {
-		return ethereum.Address{}, inverted, fmt.Errorf("failed to get contract address for pair: %s", pair.String())
+		return types.Address{}, inverted, fmt.Errorf("failed to get contract address for pair: %s", pair.String())
 	}
-	return ethereum.HexToAddress(contract), inverted, nil
+	return types.MustAddressFromHex(contract), inverted, nil
 }
 
 type SymbolAliases map[string]string
@@ -231,6 +233,17 @@ func (e *Set) Fetch(originPairs map[string][]Pair) map[string][]FetchResult {
 		handler, ok := e.list[origin]
 
 		go func() {
+			defer func() {
+				wg.Done()
+				if r := recover(); r != nil {
+					mu.Lock()
+					frs[origin] = fetchResultListWithErrors(
+						pairs,
+						fmt.Errorf("PANIC: %v", r),
+					)
+					mu.Unlock()
+				}
+			}()
 			if !ok {
 				mu.Lock()
 				frs[origin] = fetchResultListWithErrors(
@@ -244,8 +257,6 @@ func (e *Set) Fetch(originPairs map[string][]Pair) map[string][]FetchResult {
 				frs[origin] = append(frs[origin], resp...)
 				mu.Unlock()
 			}
-
-			wg.Done()
 		}()
 	}
 
@@ -267,9 +278,6 @@ func DefaultOriginSet(pool query.WorkerPool) *Set {
 		"folgory":       NewBaseExchangeHandler(Folgory{WorkerPool: pool}, nil),
 		"gateio":        NewBaseExchangeHandler(Gateio{WorkerPool: pool}, nil),
 		"gemini":        NewBaseExchangeHandler(Gemini{WorkerPool: pool}, nil),
-		"gsu":           NewBaseExchangeHandler(GSU{WorkerPool: pool}, nil),
-		"gsu1":           NewBaseExchangeHandler(GSU1{WorkerPool: pool}, nil),
-		"gsu2":           NewBaseExchangeHandler(GSU2{WorkerPool: pool}, nil),
 		"hitbtc":        NewBaseExchangeHandler(Hitbtc{WorkerPool: pool}, nil),
 		"huobi":         NewBaseExchangeHandler(Huobi{WorkerPool: pool}, nil),
 		"kraken":        NewBaseExchangeHandler(Kraken{WorkerPool: pool}, nil),
@@ -278,6 +286,10 @@ func DefaultOriginSet(pool query.WorkerPool) *Set {
 		"okex":          NewBaseExchangeHandler(Okex{WorkerPool: pool}, nil),
 		"okx":           NewBaseExchangeHandler(Okx{WorkerPool: pool}, nil),
 		"upbit":         NewBaseExchangeHandler(Upbit{WorkerPool: pool}, nil),
+		"ishares":       NewBaseExchangeHandler(IShares{WorkerPool: pool}, nil),
+		"gsu":           NewBaseExchangeHandler(GSU{WorkerPool: pool}, nil),
+		"gsu1":           NewBaseExchangeHandler(GSU1{WorkerPool: pool}, nil),
+		"gsu2":           NewBaseExchangeHandler(GSU2{WorkerPool: pool}, nil),
 	})
 }
 
@@ -327,9 +339,12 @@ func buildOriginURL(template, configURL, defaultURL string, a ...interface{}) st
 	return fmt.Sprintf(template, replacement...)
 }
 
-func reduceEtherAverageFloat(r [][]byte) *big.Float {
+func reduceEtherAverageFloat(r [][]byte) (*big.Float, error) {
 	total := new(big.Float).SetInt64(0)
 	for _, resp := range r {
+		if len(resp) < 32 {
+			return nil, fmt.Errorf("expected 32 bytes, got %d", len(resp))
+		}
 		// TODO(jamesr) Always uint256, so even if resp is larger, truncate.
 		// However, this assumes that we only care about the first 32 bytes.
 		// You might want the last 32... perhaps revisit this.
@@ -339,5 +354,5 @@ func reduceEtherAverageFloat(r [][]byte) *big.Float {
 			new(big.Float).Quo(new(big.Float).SetInt(price), new(big.Float).SetUint64(ether)),
 		)
 	}
-	return new(big.Float).Quo(total, new(big.Float).SetUint64(uint64(len(r))))
+	return new(big.Float).Quo(total, new(big.Float).SetUint64(uint64(len(r)))), nil
 }

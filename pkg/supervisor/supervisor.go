@@ -17,9 +17,8 @@ package supervisor
 
 import (
 	"context"
+	"errors"
 	"reflect"
-
-	"golang.org/x/xerrors"
 
 	"github.com/chronicleprotocol/oracle-suite/pkg/log"
 	"github.com/chronicleprotocol/oracle-suite/pkg/log/null"
@@ -31,10 +30,11 @@ const LoggerTag = "SUPERVISOR"
 type Service interface {
 	// Start starts the service.
 	Start(ctx context.Context) error
+
 	// Wait returns a channel that is blocked while service is running.
 	// When the service is stopped, the channel will be closed. If an error
 	// occurs, an error will be sent to the channel before closing it.
-	Wait() chan error
+	Wait() <-chan error
 }
 
 // Supervisor manages long-running services that implement the Service
@@ -72,10 +72,10 @@ func (s *Supervisor) Watch(services ...Service) {
 // it panics.
 func (s *Supervisor) Start(ctx context.Context) error {
 	if s.ctx != nil {
-		return xerrors.New("service can be started only once")
+		return errors.New("service can be started only once")
 	}
 	if ctx == nil {
-		return xerrors.New("context must not be nil")
+		return errors.New("context must not be nil")
 	}
 	s.ctx, s.ctxCancel = context.WithCancel(ctx)
 	for _, srv := range s.services {
@@ -97,7 +97,7 @@ func (s *Supervisor) Start(ctx context.Context) error {
 // If an error occurs in any of the services, it will be sent to the
 // channel before closing it. If multiple service crash, only the first
 // error is returned.
-func (s *Supervisor) Wait() chan error {
+func (s *Supervisor) Wait() <-chan error {
 	return s.waitCh
 }
 

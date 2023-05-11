@@ -1,81 +1,76 @@
-//  Copyright (C) 2020 Maker Ecosystem Growth Holdings, INC.
-//
-//  This program is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Affero General Public License as
-//  published by the Free Software Foundation, either version 3 of the
-//  License, or (at your option) any later version.
-//
-//  This program is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-//  GNU Affero General Public License for more details.
-//
-//  You should have received a copy of the GNU Affero General Public License
-//  along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
 package eventpublisher
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	ethereumConfig "github.com/chronicleprotocol/oracle-suite/pkg/config/ethereum"
-	"github.com/chronicleprotocol/oracle-suite/pkg/ethereum/geth"
-	"github.com/chronicleprotocol/oracle-suite/pkg/ethereumv2/types"
-	"github.com/chronicleprotocol/oracle-suite/pkg/event/publisher"
+	"github.com/chronicleprotocol/oracle-suite/pkg/config"
+	"github.com/chronicleprotocol/oracle-suite/pkg/config/ethereum"
+	"github.com/chronicleprotocol/oracle-suite/pkg/ethereum/mocks"
 	"github.com/chronicleprotocol/oracle-suite/pkg/log/null"
 	"github.com/chronicleprotocol/oracle-suite/pkg/transport/local"
 )
 
-func TestEventPublisher_Configure_Teleport(t *testing.T) {
-	prevEventPublisherFactory := eventPublisherFactory
-	defer func() { eventPublisherFactory = prevEventPublisherFactory }()
+func TestConfig(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		test func(*testing.T, *Config)
+	}{
+		{
+			name: "valid",
+			path: "config.hcl",
+			test: func(t *testing.T, cfg *Config) {
+				assert.Equal(t, "key", cfg.EthereumKey)
 
-	sig := geth.NewSigner(nil)
-	tra := local.New([]byte("test"), 0, nil)
-	_ = tra.Start(context.Background())
-	log := null.New()
+				assert.Equal(t, "client", cfg.TeleportEVM[0].EthereumClient)
+				assert.Equal(t, uint32(60), cfg.TeleportEVM[0].Interval)
+				assert.Equal(t, uint64(120), cfg.TeleportEVM[0].PrefetchPeriod)
+				assert.Equal(t, uint64(3), cfg.TeleportEVM[0].BlockConfirmations)
+				assert.Equal(t, uint64(100), cfg.TeleportEVM[0].BlockLimit)
+				assert.Equal(t, []uint64{600, 1200}, cfg.TeleportEVM[0].ReplayAfter)
+				assert.Equal(t, "0x1234567890123456789012345678901234567890", cfg.TeleportEVM[0].ContractAddrs[0].String())
+				assert.Equal(t, "0x2345678901234567890123456789012345678901", cfg.TeleportEVM[0].ContractAddrs[1].String())
 
-	config := EventPublisher{Listeners: listeners{TeleportEVM: []teleportEVMListener{{
-		Ethereum:       ethereumConfig.Ethereum{RPC: "https://example.com/"},
-		Interval:       1,
-		PrefetchPeriod: 1,
-		BlockLimit:     1,
-		ReplayAfter:    []int64{1},
-		Addresses:      []types.Address{types.HexToAddress("0x07a35a1d4b751a818d93aa38e615c0df23064881")},
-	}}}}
-
-	eventPublisherFactory = func(cfg publisher.Config) (*publisher.EventPublisher, error) {
-		assert.Equal(t, tra, cfg.Transport)
-		assert.NotNil(t, cfg.Signers)
-		assert.Equal(t, log, cfg.Logger)
-		assert.Len(t, cfg.Providers, 1)
-		assert.Len(t, cfg.Signers, 1)
-		return &publisher.EventPublisher{}, nil
+				assert.Equal(t, "http://localhost:8080", cfg.TeleportStarknet[0].Sequencer.String())
+				assert.Equal(t, uint32(60), cfg.TeleportStarknet[0].Interval)
+				assert.Equal(t, uint32(120), cfg.TeleportStarknet[0].PrefetchPeriod)
+				assert.Equal(t, []uint32{600, 1200}, cfg.TeleportStarknet[0].ReplayAfter)
+				assert.Equal(t, "3456789012345678901234567890123456789012", cfg.TeleportStarknet[0].ContractAddrs[0].Text(16))
+				assert.Equal(t, "4567890123456789012345678901234567890123", cfg.TeleportStarknet[0].ContractAddrs[1].Text(16))
+			},
+		},
+		{
+			name: "service",
+			path: "config.hcl",
+			test: func(t *testing.T, cfg *Config) {
+				transport := local.New([]byte("test"), 1, nil)
+				logger := null.New()
+				keyRegistry := ethereum.KeyRegistry{
+					"key": &mocks.Key{},
+				}
+				clientRegistry := ethereum.ClientRegistry{
+					"client": &mocks.RPC{},
+				}
+				eventPublisher, err := cfg.EventPublisher(Dependencies{
+					Keys:      keyRegistry,
+					Clients:   clientRegistry,
+					Transport: transport,
+					Logger:    logger,
+				})
+				require.NoError(t, err)
+				assert.NotNil(t, eventPublisher)
+			},
+		},
 	}
-
-	ep, err := config.Configure(Dependencies{
-		Signer:    sig,
-		Transport: tra,
-		Logger:    log,
-	})
-	require.NoError(t, err)
-	require.NotNil(t, ep)
-}
-
-func Test_ethClients_configure(t *testing.T) {
-	c := &ethClients{}
-
-	c1, err := c.configure(ethereumConfig.Ethereum{RPC: "https://example.com/"}, null.New())
-	require.NoError(t, err)
-	c2, err := c.configure(ethereumConfig.Ethereum{RPC: "https://example.com/"}, null.New())
-	require.NoError(t, err)
-	c3, err := c.configure(ethereumConfig.Ethereum{RPC: "https://example.com/", MaxBlocksBehind: 10}, null.New())
-	require.NoError(t, err)
-
-	assert.Same(t, c1, c2)
-	assert.NotSame(t, c1, c3)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var cfg Config
+			err := config.LoadFiles(&cfg, []string{"./testdata/" + test.path})
+			require.NoError(t, err)
+			test.test(t, &cfg)
+		})
+	}
 }

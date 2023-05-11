@@ -61,9 +61,11 @@ type EventAPI struct {
 type Config struct {
 	// EventStore is the event store to use.
 	EventStore *store.EventStore
+
 	// Address specifies the TCP address for the server to listen on in the
 	// form "host:port".
 	Address string
+
 	// Logger is a current logger used by the EventAPI.
 	Logger log.Logger
 }
@@ -134,7 +136,7 @@ func (e *EventAPI) Start(ctx context.Context) error {
 }
 
 // Wait waits until the context is canceled or until an error occurs.
-func (e *EventAPI) Wait() chan error {
+func (e *EventAPI) Wait() <-chan error {
 	return e.srv.Wait()
 }
 

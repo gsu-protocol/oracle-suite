@@ -18,13 +18,14 @@ package main
 import (
 	"github.com/spf13/cobra"
 
+	"github.com/chronicleprotocol/oracle-suite/pkg/config/spire"
 	"github.com/chronicleprotocol/oracle-suite/pkg/log/logrus/flag"
 )
 
 type options struct {
 	flag.LoggerFlag
-	ConfigFilePath    string
-	Config            Config
+	ConfigFilePath    []string
+	Config            spire.Config
 	Version           string
 	TransportOverride string
 }
@@ -34,22 +35,22 @@ func NewRootCommand(opts *options) *cobra.Command {
 		Use:           "spire",
 		Version:       opts.Version,
 		Short:         "",
-		Long:          "",
 		SilenceErrors: false,
 		SilenceUsage:  true,
 	}
 
 	rootCmd.PersistentFlags().AddFlagSet(flag.NewLoggerFlagSet(&opts.LoggerFlag))
-	rootCmd.PersistentFlags().StringVarP(
+	rootCmd.PersistentFlags().StringSliceVarP(
 		&opts.ConfigFilePath,
 		"config",
 		"c",
-		"./config.json",
+		[]string{"./config.hcl"},
 		"spire config file",
 	)
 
 	rootCmd.AddCommand(
 		NewAgentCmd(opts),
+		NewStreamCmd(opts),
 		NewPullCmd(opts),
 		NewPushCmd(opts),
 	)

@@ -1,126 +1,79 @@
-//  Copyright (C) 2020 Maker Ecosystem Growth Holdings, INC.
-//
-//  This program is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Affero General Public License as
-//  published by the Free Software Foundation, either version 3 of the
-//  License, or (at your option) any later version.
-//
-//  This program is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-//  GNU Affero General Public License for more details.
-//
-//  You should have received a copy of the GNU Affero General Public License
-//  along with this program.  If not, see <http://www.gnu.org/licenses/>.
-
 package config
 
 import (
 	"fmt"
-	"io/ioutil"
 	"os"
-	"path/filepath"
+	"strings"
 
-	"gopkg.in/yaml.v3"
+	"github.com/hashicorp/hcl/v2"
+	"github.com/hashicorp/hcl/v2/ext/tryfunc"
+	"github.com/zclconf/go-cty/cty"
+	"github.com/zclconf/go-cty/cty/function"
+	"github.com/zclconf/go-cty/cty/function/stdlib"
 
-	"github.com/chronicleprotocol/oracle-suite/pkg/util/interpolate"
+	"github.com/hashicorp/hcl/v2/ext/dynblock"
+
+	utilHCL "github.com/chronicleprotocol/oracle-suite/pkg/util/hcl"
+	"github.com/chronicleprotocol/oracle-suite/pkg/util/hcl/ext/include"
+	"github.com/chronicleprotocol/oracle-suite/pkg/util/hcl/ext/variables"
+	"github.com/chronicleprotocol/oracle-suite/pkg/util/hcl/funcs"
 )
 
-var getEnv = os.LookupEnv
+var hclContext = &hcl.EvalContext{
+	Variables: map[string]cty.Value{
+		"env": getEnvVars(),
+	},
+	Functions: map[string]function.Function{
+		// Standard library functions:
+		"try":    tryfunc.TryFunc,
+		"can":    tryfunc.CanFunc,
+		"range":  stdlib.RangeFunc,
+		"length": stdlib.LengthFunc,
+		"split":  stdlib.SplitFunc,
 
-func LoadFile(fileName string) (b []byte, err error) {
-	f, err := os.Open(fileName)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, err
-		}
-		return nil, fmt.Errorf("could not open file %s: %w", fileName, err)
-	}
-	defer func() {
-		if errClose := f.Close(); err == nil && errClose != nil {
-			err = errClose
-		}
-	}()
-	b, err = ioutil.ReadAll(f)
-	return b, err
+		// Custom functions:
+		"tostring": funcs.MakeToFunc(cty.String),
+		"tonumber": funcs.MakeToFunc(cty.Number),
+		"tobool":   funcs.MakeToFunc(cty.Bool),
+		"toset":    funcs.MakeToFunc(cty.Set(cty.DynamicPseudoType)),
+		"tolist":   funcs.MakeToFunc(cty.List(cty.DynamicPseudoType)),
+		"tomap":    funcs.MakeToFunc(cty.Map(cty.DynamicPseudoType)),
+	},
 }
 
-// ParseFile parses the given YAML config file from the byte slice and assigns
-// decoded values into the out value.
-func ParseFile(out interface{}, path string) error {
-	p, err := filepath.Abs(path)
+// LoadFiles loads the given paths into the given config, merging contents of
+// multiple HCL files specified by the "include" attribute using glob patterns,
+// and expanding dynamic blocks before decoding the HCL content.
+func LoadFiles(config any, paths []string) error {
+	var body hcl.Body
+	var diags hcl.Diagnostics
+	wd, err := os.Getwd()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to get working directory: %w", err)
 	}
-	f, err := os.Open(p)
-	if err != nil {
-		return fmt.Errorf("failed to load JSON config file: %w", err)
+	if body, diags = utilHCL.ParseFiles(paths, nil); diags.HasErrors() {
+		return diags
 	}
-	defer func() {
-		if errClose := f.Close(); err == nil && errClose != nil {
-			err = errClose
-		}
-	}()
-	b, err := ioutil.ReadAll(f)
-	if err != nil {
-		return fmt.Errorf("failed to load JSON config file: %w", err)
+	if body, diags = include.Include(hclContext, body, wd, 10); diags.HasErrors() {
+		return diags
 	}
-	return Parse(out, b)
-}
-
-// Parse parses the given YAML config from the byte slice and assigns decoded
-// values into the out value.
-func Parse(out interface{}, config []byte) error {
-	n := yaml.Node{}
-	if err := yaml.Unmarshal(config, &n); err != nil {
-		return fmt.Errorf("failed to parse YAML config: %w", err)
+	if body, diags = variables.Variables(hclContext, body); diags.HasErrors() {
+		return diags
 	}
-	if err := yamlReplaceEnvVars(&n); err != nil {
-		return fmt.Errorf("failed to parse YAML config: %w", err)
-	}
-	if err := n.Decode(out); err != nil {
-		return fmt.Errorf("failed to parse YAML config: %w", err)
+	if diags = utilHCL.Decode(hclContext, dynblock.Expand(body, hclContext), config); diags.HasErrors() {
+		return diags
 	}
 	return nil
 }
 
-// yamlReplaceEnvVars replaces recursively all environment variables in the
-// given YAML node.
-func yamlReplaceEnvVars(n *yaml.Node) error {
-	return yamlVisitScalarNodes(n, func(n *yaml.Node) error {
-		var err error
-		parsed := interpolate.Parse(n.Value)
-		if parsed.HasVars() {
-			n.Value = parsed.Interpolate(func(v interpolate.Variable) string {
-				env, ok := getEnv(v.Name)
-				if !ok {
-					if v.HasDefault {
-						return v.Default
-					}
-					err = fmt.Errorf("environment variable %s not set", v.Name)
-					return ""
-				}
-				return env
-			})
-			// Removing the style and tag will make the YAML decoder more
-			// forgiving. Otherwise, it will complain about type mismatches.
-			n.Style = 0
-			n.Tag = ""
-		}
-		return err
-	})
-}
-
-func yamlVisitScalarNodes(n *yaml.Node, fn func(n *yaml.Node) error) error {
-	switch n.Kind {
-	default:
-		for _, c := range n.Content {
-			if err := yamlVisitScalarNodes(c, fn); err != nil {
-				return err
-			}
-		}
-	case yaml.ScalarNode:
-		return fn(n)
+// getEnvVars retrieves environment variables from the system and returns
+// them as a cty object type, where keys are variable names and values are
+// their corresponding values.
+func getEnvVars() cty.Value {
+	envVars := make(map[string]cty.Value)
+	for _, env := range os.Environ() {
+		parts := strings.SplitN(env, "=", 2)
+		envVars[parts[0]] = cty.StringVal(parts[1])
 	}
-	return nil
+	return cty.ObjectVal(envVars)
 }

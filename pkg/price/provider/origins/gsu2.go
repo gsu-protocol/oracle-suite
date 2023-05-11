@@ -25,7 +25,8 @@ import (
 )
 
 // GSU2 URL
-const gsu2URL = "https://api.gsucoin.app/Products/GSULive/?symbol=%s"
+
+const gsu2URL = "https://api2.gsucoin.app/Products/GSULive/?symbol=%s"
 
 type gsu2Response struct {
         Price     string    `json:"price"`

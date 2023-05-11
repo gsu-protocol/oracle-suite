@@ -24,14 +24,15 @@ import (
 	"os/signal"
 
 	"github.com/spf13/cobra"
+
+	"github.com/chronicleprotocol/oracle-suite/pkg/config"
 )
 
 func NewPullCmd(opts *options) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "pull",
 		Args:  cobra.ExactArgs(1),
-		Short: "",
-		Long:  ``,
+		Short: "Pulls data from the Spire datastore (require agent)",
 	}
 
 	cmd.AddCommand(
@@ -44,26 +45,28 @@ func NewPullCmd(opts *options) *cobra.Command {
 
 func NewPullPriceCmd(opts *options) *cobra.Command {
 	return &cobra.Command{
-		Use:   "price",
+		Use:   "price ASSET_PAIR FEEDER",
 		Args:  cobra.ExactArgs(2),
-		Short: "",
-		Long:  ``,
+		Short: "Pulls latest price for a given pair and feeder",
 		RunE: func(_ *cobra.Command, args []string) (err error) {
+			if err := config.LoadFiles(&opts.Config, opts.ConfigFilePath); err != nil {
+				return err
+			}
 			ctx, ctxCancel := signal.NotifyContext(context.Background(), os.Interrupt)
-			sup, cli, err := PrepareClientServices(ctx, opts)
+			services, err := opts.Config.ClientServices(opts.Logger())
 			if err != nil {
 				return err
 			}
-			if err = sup.Start(ctx); err != nil {
+			if err = services.Start(ctx); err != nil {
 				return err
 			}
 			defer func() {
 				ctxCancel()
-				if sErr := <-sup.Wait(); err == nil { // Ignore sErr if another error has already occurred.
+				if sErr := <-services.Wait(); err == nil { // Ignore sErr if another error has already occurred.
 					err = sErr
 				}
 			}()
-			p, err := cli.PullPrice(args[0], args[1])
+			p, err := services.SpireClient.PullPrice(args[0], args[1])
 			if err != nil {
 				return err
 			}
@@ -91,24 +94,26 @@ func NewPullPricesCmd(opts *options) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "prices",
 		Args:  cobra.ExactArgs(0),
-		Short: "",
-		Long:  ``,
+		Short: "Pulls all prices",
 		RunE: func(_ *cobra.Command, args []string) (err error) {
+			if err := config.LoadFiles(&opts.Config, opts.ConfigFilePath); err != nil {
+				return err
+			}
 			ctx, ctxCancel := signal.NotifyContext(context.Background(), os.Interrupt)
-			sup, cli, err := PrepareClientServices(ctx, opts)
+			services, err := opts.Config.ClientServices(opts.Logger())
 			if err != nil {
 				return err
 			}
-			if err = sup.Start(ctx); err != nil {
+			if err = services.Start(ctx); err != nil {
 				return err
 			}
 			defer func() {
 				ctxCancel()
-				if sErr := <-sup.Wait(); err == nil { // Ignore sErr if another error has already occurred.
+				if sErr := <-services.Wait(); err == nil { // Ignore sErr if another error has already occurred.
 					err = sErr
 				}
 			}()
-			p, err := cli.PullPrices(pullPricesOpts.FilterPair, pullPricesOpts.FilterFrom)
+			p, err := services.SpireClient.PullPrices(pullPricesOpts.FilterPair, pullPricesOpts.FilterFrom)
 			if err != nil {
 				return err
 			}

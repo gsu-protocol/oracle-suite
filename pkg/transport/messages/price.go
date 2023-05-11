@@ -21,10 +21,10 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/defiweb/go-eth/types"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/chronicleprotocol/oracle-suite/pkg/ethereum"
-	"github.com/chronicleprotocol/oracle-suite/pkg/price/oracle"
+	"github.com/chronicleprotocol/oracle-suite/pkg/price/median"
 	"github.com/chronicleprotocol/oracle-suite/pkg/transport/messages/pb"
 )
 
@@ -33,12 +33,15 @@ const PriceV1MessageName = "price/v1"
 
 const priceMessageMaxSize = 1 * 1024 * 1024 // 1MB
 
-var ErrPriceMessageTooLarge = errors.New("price message too large")
-var ErrUnknownPriceMessageVersion = errors.New("unknown message version")
+var (
+	ErrPriceMessageTooLarge       = errors.New("price message too large")
+	ErrUnknownPriceMessageVersion = errors.New("unknown message version")
+	ErrInvalidPriceMessage        = errors.New("invalid price message")
+)
 
 type Price struct {
-	Price   *oracle.Price   `json:"price"`
-	Trace   json.RawMessage `json:"trace"`             // TODO: allow data in any format, not just JSON
+	Price   *median.Price   `json:"price"`
+	Trace   json.RawMessage `json:"trace"`
 	Version string          `json:"version,omitempty"` // TODO: this should move to some meta field e.g. `feedVersion`
 
 	// messageVersion is the version of the message. The value 0 corresponds to
@@ -68,10 +71,7 @@ func (p *Price) MarshallBinary() ([]byte, error) {
 		pbPrice := &pb.Price{
 			Wat:     p.Price.Wat,
 			Age:     p.Price.Age.Unix(),
-			Vrs:     ethereum.SignatureFromVRS(p.Price.V, p.Price.R, p.Price.S).Bytes(),
-			StarkR:  p.Price.StarkR,
-			StarkS:  p.Price.StarkS,
-			StarkPK: p.Price.StarkPK,
+			Vrs:     p.Price.Sig.Bytes(),
 			Trace:   p.Trace,
 			Version: p.Version,
 		}
@@ -82,7 +82,7 @@ func (p *Price) MarshallBinary() ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		if len(data) > eventMessageMaxSize {
+		if len(data) > priceMessageMaxSize {
 			return nil, ErrEventMessageTooLarge
 		}
 		return data, nil
@@ -91,7 +91,7 @@ func (p *Price) MarshallBinary() ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		if len(data) > eventMessageMaxSize {
+		if len(data) > priceMessageMaxSize {
 			return nil, ErrPriceMessageTooLarge
 		}
 		return data, nil
@@ -101,7 +101,7 @@ func (p *Price) MarshallBinary() ([]byte, error) {
 
 // UnmarshallBinary implements the transport.Message interface.
 func (p *Price) UnmarshallBinary(data []byte) error {
-	if len(data) > eventMessageMaxSize {
+	if len(data) > priceMessageMaxSize {
 		return ErrPriceMessageTooLarge
 	}
 	switch json.Valid(data) {
@@ -116,17 +116,15 @@ func (p *Price) UnmarshallBinary(data []byte) error {
 		if err := proto.Unmarshal(data, msg); err != nil {
 			return err
 		}
-		v, r, s := ethereum.SignatureFromBytes(msg.Vrs).VRS()
-		p.Price = &oracle.Price{
-			Wat:     msg.Wat,
-			Val:     new(big.Int).SetBytes(msg.Val),
-			Age:     time.Unix(msg.Age, 0),
-			V:       v,
-			R:       r,
-			S:       s,
-			StarkR:  msg.StarkR,
-			StarkS:  msg.StarkS,
-			StarkPK: msg.StarkPK,
+		sig, err := types.SignatureFromBytes(msg.Vrs)
+		if err != nil {
+			return err
+		}
+		p.Price = &median.Price{
+			Wat: msg.Wat,
+			Val: new(big.Int).SetBytes(msg.Val),
+			Age: time.Unix(msg.Age, 0),
+			Sig: sig,
 		}
 		p.Trace = msg.Trace
 		p.Version = msg.Version
@@ -137,17 +135,11 @@ func (p *Price) UnmarshallBinary(data []byte) error {
 	default:
 		return ErrUnknownPriceMessageVersion
 	}
+	if p.Price == nil {
+		return ErrInvalidPriceMessage
+	}
 	if p.Price.Val == nil {
 		p.Price.Val = big.NewInt(0)
-	}
-	if len(p.Price.StarkS) == 0 {
-		p.Price.StarkS = nil
-	}
-	if len(p.Price.StarkR) == 0 {
-		p.Price.StarkR = nil
-	}
-	if len(p.Price.StarkPK) == 0 {
-		p.Price.StarkPK = nil
 	}
 	return nil
 }
@@ -167,15 +159,10 @@ func (p *Price) AsV1() *Price {
 func (p *Price) copy() *Price {
 	c := &Price{
 		messageVersion: p.messageVersion,
-		Price: &oracle.Price{
-			Wat:     p.Price.Wat,
-			Age:     p.Price.Age,
-			V:       p.Price.V,
-			R:       p.Price.R,
-			S:       p.Price.S,
-			StarkR:  p.Price.StarkR,
-			StarkS:  p.Price.StarkS,
-			StarkPK: p.Price.StarkPK,
+		Price: &median.Price{
+			Wat: p.Price.Wat,
+			Age: p.Price.Age,
+			Sig: p.Price.Sig,
 		},
 		Trace:   p.Trace,
 		Version: p.Version,
@@ -186,18 +173,6 @@ func (p *Price) copy() *Price {
 	if p.Trace != nil {
 		c.Trace = make([]byte, len(p.Trace))
 		copy(c.Trace, p.Trace)
-	}
-	if p.Price.StarkS != nil {
-		c.Price.StarkS = make([]byte, len(p.Price.StarkS))
-		copy(c.Price.StarkS, p.Price.StarkS)
-	}
-	if p.Price.StarkR != nil {
-		c.Price.StarkR = make([]byte, len(p.Price.StarkR))
-		copy(c.Price.StarkR, p.Price.StarkR)
-	}
-	if p.Price.StarkPK != nil {
-		c.Price.StarkPK = make([]byte, len(p.Price.StarkPK))
-		copy(c.Price.StarkPK, p.Price.StarkPK)
 	}
 	return c
 }

@@ -23,10 +23,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/defiweb/go-eth/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/chronicleprotocol/oracle-suite/pkg/price/oracle"
+	"github.com/chronicleprotocol/oracle-suite/pkg/price/median"
 )
 
 func TestPrice_Marshalling(t *testing.T) {
@@ -38,16 +39,15 @@ func TestPrice_Marshalling(t *testing.T) {
 		{
 			price: &Price{
 				messageVersion: 0,
-				Price: &oracle.Price{
-					Wat:     "AAABBB",
-					Val:     big.NewInt(10),
-					Age:     time.Unix(100, 0),
-					V:       1,
-					R:       [32]byte{1},
-					S:       [32]byte{2},
-					StarkR:  []byte{3},
-					StarkS:  []byte{4},
-					StarkPK: []byte{5},
+				Price: &median.Price{
+					Wat: "AAABBB",
+					Val: big.NewInt(10),
+					Age: time.Unix(100, 0),
+					Sig: types.Signature{
+						V: new(big.Int).SetInt64(1),
+						R: new(big.Int).SetBytes([]byte{1}),
+						S: new(big.Int).SetBytes([]byte{2}),
+					},
 				},
 				Trace:   []byte("{}"),
 				Version: "0.0.1",
@@ -58,16 +58,15 @@ func TestPrice_Marshalling(t *testing.T) {
 		{
 			price: (&Price{
 				messageVersion: 0,
-				Price: &oracle.Price{
-					Wat:     "AAABBB",
-					Val:     big.NewInt(10),
-					Age:     time.Unix(100, 0),
-					V:       1,
-					R:       [32]byte{1},
-					S:       [32]byte{2},
-					StarkR:  []byte{3},
-					StarkS:  []byte{4},
-					StarkPK: []byte{5},
+				Price: &median.Price{
+					Wat: "AAABBB",
+					Val: big.NewInt(10),
+					Age: time.Unix(100, 0),
+					Sig: types.Signature{
+						V: new(big.Int).SetInt64(1),
+						R: new(big.Int).SetBytes([]byte{1}),
+						S: new(big.Int).SetBytes([]byte{2}),
+					},
 				},
 				Trace:   []byte("{}"),
 				Version: "0.0.1",
@@ -78,16 +77,15 @@ func TestPrice_Marshalling(t *testing.T) {
 		{
 			price: (&Price{
 				messageVersion: 0,
-				Price: &oracle.Price{
-					Wat:     "AAABBB",
-					Val:     big.NewInt(10),
-					Age:     time.Unix(100, 0),
-					V:       1,
-					R:       [32]byte{1},
-					S:       [32]byte{2},
-					StarkR:  []byte{3},
-					StarkS:  []byte{4},
-					StarkPK: []byte{5},
+				Price: &median.Price{
+					Wat: "AAABBB",
+					Val: big.NewInt(10),
+					Age: time.Unix(100, 0),
+					Sig: types.Signature{
+						V: new(big.Int).SetInt64(1),
+						R: new(big.Int).SetBytes([]byte{1}),
+						S: new(big.Int).SetBytes([]byte{2}),
+					},
 				},
 				Trace:   []byte("{}"),
 				Version: "0.0.1",
@@ -98,7 +96,7 @@ func TestPrice_Marshalling(t *testing.T) {
 		{
 			price: &Price{
 				messageVersion: 0,
-				Price:          &oracle.Price{},
+				Price:          &median.Price{},
 				Trace:          nil,
 				Version:        "0.0.1",
 			},
@@ -108,7 +106,7 @@ func TestPrice_Marshalling(t *testing.T) {
 		{
 			price: (&Price{
 				messageVersion: 0,
-				Price:          &oracle.Price{},
+				Price:          &median.Price{},
 				Trace:          nil,
 				Version:        "0.0.1",
 			}).AsV0(),
@@ -118,7 +116,7 @@ func TestPrice_Marshalling(t *testing.T) {
 		{
 			price: (&Price{
 				messageVersion: 0,
-				Price:          &oracle.Price{},
+				Price:          &median.Price{},
 				Trace:          nil,
 				Version:        "0.0.1",
 			}).AsV1(),
@@ -128,7 +126,7 @@ func TestPrice_Marshalling(t *testing.T) {
 		{
 			price: &Price{
 				messageVersion: 0,
-				Price:          &oracle.Price{},
+				Price:          &median.Price{},
 				Trace:          nil,
 				Version:        strings.Repeat("a", priceMessageMaxSize+1),
 			},
@@ -138,7 +136,7 @@ func TestPrice_Marshalling(t *testing.T) {
 		{
 			price: (&Price{
 				messageVersion: 0,
-				Price:          &oracle.Price{},
+				Price:          &median.Price{},
 				Trace:          nil,
 				Version:        strings.Repeat("a", priceMessageMaxSize+1),
 			}).AsV0(),
@@ -148,7 +146,7 @@ func TestPrice_Marshalling(t *testing.T) {
 		{
 			price: (&Price{
 				messageVersion: 0,
-				Price:          &oracle.Price{},
+				Price:          &median.Price{},
 				Trace:          nil,
 				Version:        strings.Repeat("a", priceMessageMaxSize+1),
 			}).AsV1(),
@@ -172,12 +170,7 @@ func TestPrice_Marshalling(t *testing.T) {
 					assert.Equal(t, big.NewInt(0), price.Price.Val)
 				}
 				assert.Equal(t, tt.price.Price.Age.Unix(), price.Price.Age.Unix())
-				assert.Equal(t, tt.price.Price.V, price.Price.V)
-				assert.Equal(t, tt.price.Price.R, price.Price.R)
-				assert.Equal(t, tt.price.Price.S, price.Price.S)
-				assert.Equal(t, tt.price.Price.StarkR, price.Price.StarkR)
-				assert.Equal(t, tt.price.Price.StarkS, price.Price.StarkS)
-				assert.Equal(t, tt.price.Price.StarkPK, price.Price.StarkPK)
+				assert.Equal(t, tt.price.Price.Sig.Bytes(), price.Price.Sig.Bytes())
 				assert.Equal(t, tt.price.Version, price.Version)
 
 				if tt.price.messageVersion == 0 && tt.price.Trace == nil {
@@ -188,4 +181,10 @@ func TestPrice_Marshalling(t *testing.T) {
 			}
 		})
 	}
+}
+
+func FuzzPrice_UnmarshallBinary(f *testing.F) {
+	f.Fuzz(func(t *testing.T, data []byte) {
+		_ = (&Price{}).UnmarshallBinary(data)
+	})
 }

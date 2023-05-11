@@ -149,7 +149,6 @@ linters:
   disable-all: true
   enable:
     - bodyclose
-    - deadcode
     - depguard
     - dogsled
     #- dupl
@@ -172,15 +171,14 @@ linters:
     - lll
     - nakedret
     - nolintlint
-#    - rowserrcheck
+    #- rowserrcheck
     - staticcheck
-#    - structcheck
+    #- structcheck
     - stylecheck
     - typecheck
     - unconvert
     - unparam
     - unused
-    - varcheck
     - whitespace
 
   # don't enable:
@@ -198,7 +196,9 @@ linters:
   # - wsl
 
 issues:
-  # Excluding configuration per-path, per-linter, per-text and per-source
+  exclude:
+    - '.*github.com/chronicleprotocol/oracle-suite/pkg/ethereum.*is deprecated.*'
+    - '.*Use ethereumv2 package instead.*'
   exclude-rules:
     - path: /mocks/
       linters:

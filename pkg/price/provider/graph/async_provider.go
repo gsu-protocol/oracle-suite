@@ -42,9 +42,8 @@ type AsyncProvider struct {
 
 // NewAsyncProvider returns a new AsyncGofer instance.
 func NewAsyncProvider(
-	graph map[provider.Pair]nodes.Aggregator,
+	graph map[provider.Pair]nodes.Node,
 	feeder *feeder.Feeder,
-	nodes []nodes.Node,
 	logger log.Logger,
 ) (*AsyncProvider, error) {
 
@@ -52,7 +51,6 @@ func NewAsyncProvider(
 		Provider: NewProvider(graph, nil),
 		waitCh:   make(chan error),
 		feeder:   feeder,
-		nodes:    nodes,
 		log:      logger.WithField("tag", LoggerTag),
 	}, nil
 }
@@ -116,7 +114,7 @@ func (a *AsyncProvider) Start(ctx context.Context) error {
 }
 
 // Wait waits until the context is canceled or until an error occurs.
-func (a *AsyncProvider) Wait() chan error {
+func (a *AsyncProvider) Wait() <-chan error {
 	return a.waitCh
 }
 

@@ -54,10 +54,13 @@ type EventSigner interface {
 type Config struct {
 	// Providers is a list of event providers.
 	Providers []EventProvider
+
 	// EventSigner is a list of Signers used to sign events.
 	Signers []EventSigner
+
 	// Transport is used to send events to the Oracle network.
 	Transport transport.Transport
+
 	// Logger is a current logger interface used by the EventPublisher.
 	Logger log.Logger
 }
@@ -101,19 +104,19 @@ func (l *EventPublisher) Start(ctx context.Context) error {
 }
 
 // Wait implements the supervisor.Service interface.
-func (l *EventPublisher) Wait() chan error {
+func (l *EventPublisher) Wait() <-chan error {
 	return l.waitCh
 }
 
 func (l *EventPublisher) listenerLoop() {
 	for _, li := range l.listeners {
-		li := li
+		ch := li.Events()
 		go func() {
 			for {
 				select {
 				case <-l.ctx.Done():
 					return
-				case e := <-li.Events():
+				case e := <-ch:
 					l.broadcast(e)
 				}
 			}
@@ -134,7 +137,6 @@ func (l *EventPublisher) broadcast(evt *messages.Event) {
 			"messageDate": evt.MessageDate,
 			"data":        evt.Data,
 			"signatures":  evt.Signatures,
-			"from":        l.transport.ID(),
 		}).
 		Info("Event published")
 	err := l.transport.Broadcast(messages.EventV1MessageName, evt)
@@ -144,7 +146,6 @@ func (l *EventPublisher) broadcast(evt *messages.Event) {
 			WithFields(log.Fields{
 				"id":   evt.ID,
 				"type": evt.Type,
-				"from": l.transport.ID(),
 			}).
 			Error("Unable to publish the event")
 	}
@@ -163,7 +164,6 @@ func (l *EventPublisher) sign(evt *messages.Event) bool {
 				WithFields(log.Fields{
 					"id":   evt.ID,
 					"type": evt.Type,
-					"from": l.transport.ID(),
 				}).
 				Error("Unable to sign the event")
 			continue
@@ -175,7 +175,6 @@ func (l *EventPublisher) sign(evt *messages.Event) bool {
 			WithFields(log.Fields{
 				"id":   evt.ID,
 				"type": evt.Type,
-				"from": l.transport.ID(),
 			}).
 			Warn("There are no signers that supports the event")
 	}

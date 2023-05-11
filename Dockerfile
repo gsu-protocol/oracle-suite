@@ -1,4 +1,4 @@
-FROM golang:1.18-alpine as builder
+FROM golang:1.20-alpine as builder
 RUN apk --no-cache add git gcc libc-dev linux-headers
 
 WORKDIR /go/src/oracle-suite
@@ -24,6 +24,6 @@ EXPOSE 8082
 EXPOSE 9000
 EXPOSE 9100
 
-COPY ./config.json .
+COPY ./config.hcl .
 
 CMD ["/bin/bash"]

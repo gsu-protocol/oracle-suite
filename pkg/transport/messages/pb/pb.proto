@@ -15,7 +15,7 @@
 
 syntax = "proto3";
 
-option go_package = "github.com/chronicleprotocol/oracle-suite/pkg/transport/libp2p/messages/pb";
+option go_package = "github.com/chronicleprotocol/oracle-suite/pkg/transport/messages/pb";
 
 message Price {
   // Price:
@@ -26,10 +26,7 @@ message Price {
   // Ethereum Signature:
   bytes vrs = 4; // v, r, s combined into one byte array
 
-  // Starknet Signature:
-  bytes starkR = 5;
-  bytes starkS = 6;
-  bytes starkPK = 7;
+  // Fields 5, 6 and 7 are not longer used. They must not be used in the future.
 
   // Additional data:
   bytes trace = 8;

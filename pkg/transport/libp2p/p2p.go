@@ -21,19 +21,22 @@ import (
 	"fmt"
 	"time"
 
-	core "github.com/libp2p/go-libp2p-core"
-	"github.com/libp2p/go-libp2p-core/crypto"
-	"github.com/libp2p/go-libp2p-core/peer"
+	cryptoETH "github.com/defiweb/go-eth/crypto"
+	"github.com/defiweb/go-eth/types"
+	"github.com/defiweb/go-eth/wallet"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	"github.com/libp2p/go-libp2p/core"
+	"github.com/libp2p/go-libp2p/core/crypto"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/multiformats/go-multiaddr"
 
-	"github.com/chronicleprotocol/oracle-suite/pkg/ethereum"
 	"github.com/chronicleprotocol/oracle-suite/pkg/log"
 	"github.com/chronicleprotocol/oracle-suite/pkg/log/null"
 	"github.com/chronicleprotocol/oracle-suite/pkg/transport"
 	"github.com/chronicleprotocol/oracle-suite/pkg/transport/libp2p/crypto/ethkey"
 	"github.com/chronicleprotocol/oracle-suite/pkg/transport/libp2p/internal"
 	"github.com/chronicleprotocol/oracle-suite/pkg/transport/messages"
+	"github.com/chronicleprotocol/oracle-suite/pkg/util/chanutil"
 )
 
 const LoggerTag = "P2P"
@@ -74,50 +77,62 @@ var defaultListenAddrs = []string{"/ip4/0.0.0.0/tcp/0"}
 // P2P is the wrapper for the Node that implements the transport.Transport
 // interface.
 type P2P struct {
-	id     peer.ID
-	node   *internal.Node
-	mode   Mode
-	topics map[string]transport.Message
-	msgCh  map[string]chan transport.ReceivedMessage
+	id        peer.ID
+	node      *internal.Node
+	mode      Mode
+	topics    map[string]transport.Message
+	msgCh     map[string]chan transport.ReceivedMessage
+	msgFanOut map[string]*chanutil.FanOut[transport.ReceivedMessage]
 }
 
 // Config is the configuration for the P2P transport.
 type Config struct {
 	// Mode describes in what mode the node should operate.
 	Mode Mode
+
 	// Topics is a list of subscribed topics. A value of the map a type of
 	// message given as a nil pointer, e.g.: (*Message)(nil).
 	Topics map[string]transport.Message
+
 	// PeerPrivKey is a key used for peer identity. If empty, then random key
 	// is used. Ignored in bootstrap mode.
 	PeerPrivKey crypto.PrivKey
+
 	// MessagePrivKey is a key used to sign messages. If empty, then message
 	// are signed with the same key which is used for peer identity. Ignored
 	// in bootstrap mode.
 	MessagePrivKey crypto.PrivKey
+
 	// ListenAddrs is a list of multiaddresses on which this node will be
 	// listening on. If empty, the localhost, and a random port will be used.
 	ListenAddrs []string
+
 	// BootstrapAddrs is a list multiaddresses of initial peers to connect to.
 	// This option is ignored when discovery is disabled.
 	BootstrapAddrs []string
+
 	// DirectPeersAddrs is a list multiaddresses of peers to which messages
-	// will be send directly. This option has to be configured symmetrically
+	// will be sent directly. This option has to be configured symmetrically
 	// at both ends.
 	DirectPeersAddrs []string
+
 	// BlockedAddrs is a list of multiaddresses to which connection will be
 	// blocked. If an address on that list contains an IP and a peer ID, both
 	// will be blocked separately.
 	BlockedAddrs []string
-	// FeedersAddrs is a list of price feeders. Only feeders can create new
-	// messages in the network.
-	FeedersAddrs []ethereum.Address
+
+	// AuthorAllowlist is a list of allowed message authors. Only messages from
+	// these addresses will be accepted.
+	AuthorAllowlist []types.Address
+
 	// Discovery indicates whenever peer discovery should be enabled.
 	// If discovery is disabled, then DirectPeersAddrs must be used
 	// to connect to the network. Always enabled in bootstrap mode.
 	Discovery bool
+
 	// Signer used to verify price messages. Ignored in bootstrap mode.
-	Signer ethereum.Signer
+	Signer wallet.Key
+
 	// Logger is a custom logger instance. If not provided then null
 	// logger is used.
 	Logger log.Logger
@@ -129,7 +144,8 @@ type Config struct {
 
 // New returns a new instance of a transport, implemented with
 // the libp2p library.
-// nolint:gocyclo,funlen
+//
+//nolint:gocyclo,funlen
 func New(cfg Config) (*P2P, error) {
 	var err error
 
@@ -210,9 +226,9 @@ func New(cfg Config) (*P2P, error) {
 				return nil
 			}),
 			messageValidator(cfg.Topics, logger), // must be registered before any other validator
-			feederValidator(cfg.FeedersAddrs, logger),
+			feederValidator(cfg.AuthorAllowlist, logger),
 			eventValidator(logger),
-			priceValidator(cfg.Signer, logger),
+			priceValidator(logger, cryptoETH.ECRecoverer),
 		)
 		if cfg.MessagePrivKey != nil {
 			opts = append(opts, internal.MessagePrivKey(cfg.MessagePrivKey))
@@ -240,25 +256,26 @@ func New(cfg Config) (*P2P, error) {
 	}
 
 	return &P2P{
-		id:     id,
-		node:   n,
-		mode:   cfg.Mode,
-		topics: cfg.Topics,
-		msgCh:  map[string]chan transport.ReceivedMessage{},
+		id:        id,
+		node:      n,
+		mode:      cfg.Mode,
+		topics:    cfg.Topics,
+		msgCh:     map[string]chan transport.ReceivedMessage{},
+		msgFanOut: map[string]*chanutil.FanOut[transport.ReceivedMessage]{},
 	}, nil
 }
 
 // Start implements the transport.Transport interface.
 func (p *P2P) Start(ctx context.Context) error {
-	err := p.node.Start(ctx)
-	if err != nil {
+	if err := p.node.Start(ctx); err != nil {
 		return fmt.Errorf("P2P transport error, unable to start node: %w", err)
 	}
 	if p.mode == ClientMode {
 		for topic := range p.topics {
-			p.msgCh[topic] = make(chan transport.ReceivedMessage)
-			err := p.subscribe(topic)
-			if err != nil {
+			msgCh := make(chan transport.ReceivedMessage)
+			p.msgCh[topic] = msgCh
+			p.msgFanOut[topic] = chanutil.NewFanOut(msgCh)
+			if err := p.subscribe(topic); err != nil {
 				return err
 			}
 		}
@@ -267,13 +284,8 @@ func (p *P2P) Start(ctx context.Context) error {
 }
 
 // Wait implements the transport.Transport interface.
-func (p *P2P) Wait() chan error {
+func (p *P2P) Wait() <-chan error {
 	return p.node.Wait()
-}
-
-// ID implements the transport.Transport interface.
-func (p *P2P) ID() []byte {
-	return ethkey.PeerIDToAddress(p.id).Bytes()
 }
 
 // Broadcast implements the transport.Transport interface.
@@ -290,8 +302,11 @@ func (p *P2P) Broadcast(topic string, message transport.Message) error {
 }
 
 // Messages implements the transport.Transport interface.
-func (p *P2P) Messages(topic string) chan transport.ReceivedMessage {
-	return p.msgCh[topic]
+func (p *P2P) Messages(topic string) <-chan transport.ReceivedMessage {
+	if fo, ok := p.msgFanOut[topic]; ok {
+		return fo.Chan()
+	}
+	return nil
 }
 
 func (p *P2P) subscribe(topic string) error {
@@ -337,8 +352,8 @@ func rateLimiterConfig(cfg Config) internal.RateLimiterConfig {
 	bytesPerSecond := maxBytesPerSecond
 	burstSize := maxBytesPerSecond * priceUpdateInterval.Seconds()
 	return internal.RateLimiterConfig{
-		BytesPerSecond:      maxBytesPerSecond / float64(len(cfg.FeedersAddrs)),
-		BurstSize:           int(burstSize / float64(len(cfg.FeedersAddrs))),
+		BytesPerSecond:      maxBytesPerSecond / float64(len(cfg.AuthorAllowlist)),
+		BurstSize:           int(burstSize / float64(len(cfg.AuthorAllowlist))),
 		RelayBytesPerSecond: bytesPerSecond,
 		RelayBurstSize:      int(burstSize),
 	}

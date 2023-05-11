@@ -16,17 +16,16 @@
 package eventpublisher
 
 import (
-	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"time"
 
-	"github.com/chronicleprotocol/oracle-suite/pkg/ethereumv2/rpcclient"
-	"github.com/chronicleprotocol/oracle-suite/pkg/ethereumv2/types"
+	"github.com/defiweb/go-eth/types"
+	"github.com/hashicorp/hcl/v2"
 
+	"github.com/chronicleprotocol/oracle-suite/pkg/config"
 	ethereumConfig "github.com/chronicleprotocol/oracle-suite/pkg/config/ethereum"
-	"github.com/chronicleprotocol/oracle-suite/pkg/ethereum"
+	"github.com/chronicleprotocol/oracle-suite/pkg/ethereum/geth"
 	"github.com/chronicleprotocol/oracle-suite/pkg/event/publisher"
 	"github.com/chronicleprotocol/oracle-suite/pkg/event/publisher/replayer"
 	"github.com/chronicleprotocol/oracle-suite/pkg/event/publisher/teleportevm"
@@ -36,182 +35,262 @@ import (
 	"github.com/chronicleprotocol/oracle-suite/pkg/transport"
 )
 
-//nolint
-var eventPublisherFactory = func(cfg publisher.Config) (*publisher.EventPublisher, error) {
-	return publisher.New(cfg)
-}
-
-type EventPublisher struct {
-	Listeners listeners `yaml:"listeners"`
-}
-
-type listeners struct {
-	TeleportEVM      []teleportEVMListener      `yaml:"teleportEVM"`
-	TeleportStarknet []teleportStarknetListener `yaml:"teleportStarknet"`
-}
-
-type teleportEVMListener struct {
-	Ethereum           ethereumConfig.Ethereum `yaml:"ethereum"`
-	Interval           int64                   `yaml:"interval"`
-	PrefetchPeriod     int64                   `yaml:"prefetchPeriod"`
-	BlockConfirmations int64                   `yaml:"blockConfirmations"`
-	BlockLimit         int                     `yaml:"blockLimit"`
-	ReplayAfter        []int64                 `yaml:"replayAfter"`
-	Addresses          []types.Address         `yaml:"addresses"`
-}
-
-type teleportStarknetListener struct {
-	Sequencer      string                 `yaml:"sequencer"`
-	Interval       int64                  `yaml:"interval"`
-	PrefetchPeriod int64                  `yaml:"prefetchPeriod"`
-	ReplayAfter    []int64                `yaml:"replayAfter"`
-	Addresses      []*starknetClient.Felt `yaml:"addresses"`
-}
-
 type Dependencies struct {
-	Signer    ethereum.Signer
+	Keys      ethereumConfig.KeyRegistry
+	Clients   ethereumConfig.ClientRegistry
 	Transport transport.Transport
 	Logger    log.Logger
 }
 
-func (c *EventPublisher) Configure(d Dependencies) (*publisher.EventPublisher, error) {
-	if d.Signer == nil {
-		return nil, fmt.Errorf("eventpublisher config: signer cannot be nil")
+type Config struct {
+	// EthereumKey is the name of the key to use for signing events.
+	EthereumKey string `hcl:"ethereum_key"`
+
+	// TeleportEVM is a list of Teleport listeners for EVM-compatible chains.
+	TeleportEVM []teleportEVMListener `hcl:"teleport_evm,block"`
+
+	// TeleportStarknet is a list of Teleport listeners for Starknet.
+	TeleportStarknet []teleportStarknetListener `hcl:"teleport_starknet,block"`
+
+	// HCL fields:
+	Range   hcl.Range       `hcl:",range"`
+	Content hcl.BodyContent `hcl:",content"`
+
+	// Configured service:
+	eventPublisher *publisher.EventPublisher
+}
+
+type teleportEVMListener struct {
+	// EthereumClient is the name of the Ethereum client to use for
+	// listening to events.
+	EthereumClient string `hcl:"ethereum_client"`
+
+	// Interval specifies how often, in seconds, the event listener should
+	// check for new events.
+	Interval uint32 `hcl:"interval"`
+
+	// PrefetchPeriod specifies how far, in seconds, the event listener should
+	// check for new  events during the initial synchronization.
+	PrefetchPeriod uint64 `hcl:"prefetch_period"`
+
+	// BlockConfirmations is the number of blocks to wait before
+	// considering a block final.
+	BlockConfirmations uint64 `hcl:"block_confirmations"`
+
+	// BlockLimit is the maximum range of blocks to fetch in a single
+	// filter log request.
+	BlockLimit uint64 `hcl:"block_limit"`
+
+	// ReplayAfter specifies after which time, in seconds, the event listener
+	// should replay events. It is used to guarantee that events are eventually
+	// delivered to subscribers even if they are not online at the time the event
+	// was published.
+	ReplayAfter []uint64 `hcl:"replay_after"`
+
+	// ContractAddrs is a list of teleport contract addresses to listen
+	// to.
+	ContractAddrs []types.Address `hcl:"contract_addrs"`
+
+	// HCL fields:
+	Range   hcl.Range       `hcl:",range"`
+	Content hcl.BodyContent `hcl:",content"`
+}
+
+type teleportStarknetListener struct {
+	// Sequencer is the name of the Starknet sequencer to use for listening
+	// to events.
+	Sequencer config.URL `hcl:"sequencer"`
+
+	// Interval specifies how often, in seconds, the event listener should
+	// check for new events.
+	Interval uint32 `hcl:"interval"`
+
+	// PrefetchPeriod specifies how far, in seconds, the event listener should
+	// check for new  events during the initial synchronization.
+	PrefetchPeriod uint32 `hcl:"prefetch_period"`
+
+	// ReplayAfter specifies after which time, in seconds, the event listener
+	// should replay events. It is used to guarantee that events are eventually
+	// delivered to subscribers even if they are not online at the time the event
+	// was published.
+	ReplayAfter []uint32 `hcl:"replay_after"`
+
+	// ContractAddrs is a list of teleport contract addresses to listen
+	// to.
+	ContractAddrs []*starknetClient.Felt `hcl:"contract_addrs"`
+
+	// HCL fields:
+	Range   hcl.Range       `hcl:",range"`
+	Content hcl.BodyContent `hcl:",content"`
+}
+
+func (c *Config) EventPublisher(d Dependencies) (*publisher.EventPublisher, error) {
+	if c.eventPublisher != nil {
+		return c.eventPublisher, nil
 	}
-	if d.Transport == nil {
-		return nil, fmt.Errorf("eventpublisher config: transport cannot be nil")
+	var eventProviders []publisher.EventProvider
+	if err := c.teleportEVM(&eventProviders, d); err != nil {
+		return nil, err
 	}
-	if d.Logger == nil {
-		return nil, fmt.Errorf("eventpublisher config: logger cannot be nil")
+	if err := c.teleportStarknet(&eventProviders, d); err != nil {
+		return nil, err
 	}
-	var eps []publisher.EventProvider
-	if err := c.configureTeleportEVM(&eps, d.Logger); err != nil {
-		return nil, fmt.Errorf("eventpublisher config: teleport EVM: %w", err)
+	key, ok := d.Keys[c.EthereumKey]
+	if !ok {
+		return nil, &hcl.Diagnostic{
+			Severity: hcl.DiagError,
+			Summary:  "Validation error",
+			Detail:   fmt.Sprintf("Ethereum key %q is not configured", c.EthereumKey),
+			Subject:  c.Content.Attributes["ethereum_key"].Range.Ptr(),
+		}
 	}
-	if err := c.configureTeleportStarknet(&eps, d.Logger); err != nil {
-		return nil, fmt.Errorf("eventpublisher config: teleport Starknet: %w", err)
-	}
-	signer := []publisher.EventSigner{teleportevm.NewSigner(d.Signer, []string{
+	signer := []publisher.EventSigner{teleportevm.NewSigner(key, []string{
 		teleportevm.TeleportEventType,
 		teleportstarknet.TeleportEventType,
 	})}
-	cfg := publisher.Config{
-		Providers: eps,
+	eventPublisher, err := publisher.New(publisher.Config{
+		Providers: eventProviders,
 		Signers:   signer,
 		Transport: d.Transport,
 		Logger:    d.Logger,
-	}
-	ep, err := eventPublisherFactory(cfg)
+	})
 	if err != nil {
-		return nil, fmt.Errorf("eventpublisher config: %w", err)
+		return nil, &hcl.Diagnostic{
+			Severity: hcl.DiagError,
+			Summary:  "Runtime error",
+			Detail:   fmt.Sprintf("Failed to create the Event Publisher service: %v", err),
+			Subject:  c.Range.Ptr(),
+		}
 	}
-	return ep, nil
+	c.eventPublisher = eventPublisher
+	return eventPublisher, nil
 }
 
-func (c *EventPublisher) configureTeleportEVM(lis *[]publisher.EventProvider, logger log.Logger) error {
-	clients := ethClients{}
-	for _, cfg := range c.Listeners.TeleportEVM {
-		client, err := clients.configure(cfg.Ethereum, logger)
-		if err != nil {
-			return err
+func (c *Config) teleportEVM(eps *[]publisher.EventProvider, d Dependencies) error {
+	var err error
+	for _, cfg := range c.TeleportEVM {
+		if cfg.Interval == 0 {
+			return hcl.Diagnostics{&hcl.Diagnostic{
+				Summary:  "Validation error",
+				Detail:   "Interval cannot be zero",
+				Severity: hcl.DiagError,
+				Subject:  cfg.Content.Attributes["interval"].Range.Ptr(),
+			}}
 		}
-		interval := cfg.Interval
-		if interval < 1 {
-			interval = 1
+		if len(cfg.ContractAddrs) == 0 {
+			return hcl.Diagnostics{&hcl.Diagnostic{
+				Summary:  "Validation error",
+				Detail:   "Contract addresses cannot be empty",
+				Severity: hcl.DiagError,
+				Subject:  cfg.Content.Attributes["contract_addrs"].Range.Ptr(),
+			}}
 		}
-		if cfg.BlockLimit == 0 {
-			cfg.BlockLimit = 1000
+		client, ok := d.Clients[cfg.EthereumClient]
+		if !ok {
+			return &hcl.Diagnostic{
+				Severity: hcl.DiagError,
+				Summary:  "Validation error",
+				Detail:   fmt.Sprintf("Ethereum client %q is not configured", cfg.EthereumClient),
+				Subject:  cfg.Content.Attributes["ethereum_client"].Range.Ptr(),
+			}
 		}
 		replayAfter := make([]time.Duration, len(cfg.ReplayAfter))
 		for i, r := range cfg.ReplayAfter {
-			replayAfter[i] = time.Duration(r) * time.Second
+			replayAfter[i] = time.Second * time.Duration(r)
 		}
-		var ep publisher.EventProvider
-		ep, err = teleportevm.New(teleportevm.Config{
-			Client:             client,
-			Addresses:          cfg.Addresses,
-			Interval:           time.Second * time.Duration(interval),
-			PrefetchPeriod:     time.Duration(cfg.PrefetchPeriod) * time.Second,
-			BlockLimit:         uint64(cfg.BlockLimit),
-			BlockConfirmations: uint64(cfg.BlockConfirmations),
-			Logger:             logger,
+		var eventProvider publisher.EventProvider
+		eventProvider, err = teleportevm.New(teleportevm.Config{
+			Client:             geth.NewClient(client), //nolint:staticcheck // deprecated ethereum.Client
+			Addresses:          cfg.ContractAddrs,
+			Interval:           time.Second * time.Duration(cfg.Interval),
+			PrefetchPeriod:     time.Second * time.Duration(cfg.PrefetchPeriod),
+			BlockLimit:         cfg.BlockLimit,
+			BlockConfirmations: cfg.BlockConfirmations,
+			Logger:             d.Logger,
 		})
 		if err != nil {
-			return err
+			return &hcl.Diagnostic{
+				Severity: hcl.DiagError,
+				Summary:  "Runtime error",
+				Detail:   fmt.Sprintf("Failed to create the EVM Event Provider for teleport: %v", err),
+				Subject:  cfg.Range.Ptr(),
+			}
 		}
 		if len(cfg.ReplayAfter) > 0 {
-			ep, err = replayer.New(replayer.Config{
-				EventProvider: ep,
+			eventProvider, err = replayer.New(replayer.Config{
+				EventProvider: eventProvider,
 				Interval:      time.Minute,
 				ReplayAfter:   replayAfter,
 			})
 		}
 		if err != nil {
-			return err
+			return &hcl.Diagnostic{
+				Severity: hcl.DiagError,
+				Summary:  "Runtime error",
+				Detail:   fmt.Sprintf("Failed to create the EVM Event Provider for teleport: %v", err),
+				Subject:  cfg.Range.Ptr(),
+			}
 		}
-		*lis = append(*lis, ep)
+		*eps = append(*eps, eventProvider)
 	}
 	return nil
 }
 
-func (c *EventPublisher) configureTeleportStarknet(lis *[]publisher.EventProvider, logger log.Logger) error {
+func (c *Config) teleportStarknet(eps *[]publisher.EventProvider, d Dependencies) error {
 	var err error
-	for _, cfg := range c.Listeners.TeleportStarknet {
-		interval := cfg.Interval
-		if interval < 1 {
-			interval = 1
+	for _, cfg := range c.TeleportStarknet {
+		if cfg.Interval == 0 {
+			return hcl.Diagnostics{&hcl.Diagnostic{
+				Summary:  "Validation error",
+				Detail:   "Interval cannot be zero",
+				Severity: hcl.DiagError,
+				Subject:  cfg.Content.Attributes["interval"].Range.Ptr(),
+			}}
 		}
-		if _, err := url.Parse(cfg.Sequencer); err != nil {
-			return fmt.Errorf("sequencer url is invalid: %w", err)
+		if len(cfg.ContractAddrs) == 0 {
+			return hcl.Diagnostics{&hcl.Diagnostic{
+				Summary:  "Validation error",
+				Detail:   "Contract addresses cannot be empty",
+				Severity: hcl.DiagError,
+				Subject:  cfg.Content.Attributes["contract_addrs"].Range.Ptr(),
+			}}
 		}
 		replayAfter := make([]time.Duration, len(cfg.ReplayAfter))
 		for i, r := range cfg.ReplayAfter {
-			replayAfter[i] = time.Duration(r) * time.Second
+			replayAfter[i] = time.Duration(r)
 		}
-		var ep publisher.EventProvider
-		ep, err = teleportstarknet.New(teleportstarknet.Config{
-			Sequencer:      starknetClient.NewSequencer(cfg.Sequencer, http.Client{}),
-			Addresses:      cfg.Addresses,
-			Interval:       time.Second * time.Duration(interval),
-			PrefetchPeriod: time.Duration(cfg.PrefetchPeriod) * time.Second,
-			Logger:         logger,
+		var eventProvider publisher.EventProvider
+		eventProvider, err = teleportstarknet.New(teleportstarknet.Config{
+			Sequencer:      starknetClient.NewSequencer(cfg.Sequencer.String(), http.Client{}),
+			Addresses:      cfg.ContractAddrs,
+			Interval:       time.Second * time.Duration(cfg.Interval),
+			PrefetchPeriod: time.Second * time.Duration(cfg.PrefetchPeriod),
+			Logger:         d.Logger,
 		})
 		if err != nil {
-			return err
+			return &hcl.Diagnostic{
+				Severity: hcl.DiagError,
+				Summary:  "Runtime error",
+				Detail:   fmt.Sprintf("Failed to create the Starknet Event Provider for teleport: %v", err),
+				Subject:  cfg.Range.Ptr(),
+			}
 		}
 		if len(cfg.ReplayAfter) > 0 {
-			ep, err = replayer.New(replayer.Config{
-				EventProvider: ep,
+			eventProvider, err = replayer.New(replayer.Config{
+				EventProvider: eventProvider,
 				Interval:      time.Minute,
 				ReplayAfter:   replayAfter,
 			})
 			if err != nil {
-				return err
+				return &hcl.Diagnostic{
+					Severity: hcl.DiagError,
+					Summary:  "Runtime error",
+					Detail:   fmt.Sprintf("Failed to create the Starknet Event Provider for teleport: %v", err),
+					Subject:  cfg.Range.Ptr(),
+				}
 			}
 		}
-		*lis = append(*lis, ep)
+		*eps = append(*eps, eventProvider)
 	}
 	return nil
-}
-
-type ethClients map[string]*rpcclient.Client
-
-// configure returns an Ethereum client for given configuration.
-// It will return the same instance of the client for the same
-// configuration.
-func (m ethClients) configure(ethereum ethereumConfig.Ethereum, logger log.Logger) (*rpcclient.Client, error) {
-	key, err := json.Marshal(ethereum)
-	if err != nil {
-		return nil, err
-	}
-	if c, ok := m[string(key)]; ok {
-		return c, nil
-	}
-	c, err := ethereum.ConfigureRPCClient(logger)
-	if err != nil {
-		return nil, err
-	}
-	r := rpcclient.New(c)
-	m[string(key)] = r
-	return r, nil
 }

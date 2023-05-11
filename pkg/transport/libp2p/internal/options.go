@@ -19,14 +19,14 @@ import (
 	"time"
 
 	"github.com/libp2p/go-libp2p"
-	connmgr "github.com/libp2p/go-libp2p-connmgr"
-	"github.com/libp2p/go-libp2p-core/crypto"
-	"github.com/libp2p/go-libp2p-core/network"
-	"github.com/libp2p/go-libp2p-core/peer"
-	"github.com/libp2p/go-libp2p-core/peerstore"
-	discovery "github.com/libp2p/go-libp2p-discovery"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
+	"github.com/libp2p/go-libp2p/core/crypto"
+	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/peerstore"
+	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
+	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
 	"github.com/multiformats/go-multiaddr"
 
 	"github.com/chronicleprotocol/oracle-suite/pkg/transport/libp2p/internal/sets"
@@ -194,8 +194,8 @@ func Discovery(bootstrapAddrs []multiaddr.Multiaddr) Options {
 					WithField("bootstrapAddrs", bootstrapAddrs).
 					Info("Starting KAD-DHT discovery")
 				for _, addr := range addrs {
-					// bootstrap nodes aren't protected by KAD-DHT so we have
-					// do it manually
+					// Bootstrap nodes are not protected by KAD-DHT, so we have
+					// done it manually.
 					n.connmgr.Protect(addr.ID, "bootstrap")
 					n.peerstore.AddAddrs(addr.ID, addr.Addrs, peerstore.PermanentAddrTTL)
 				}
@@ -212,7 +212,7 @@ func Discovery(bootstrapAddrs []multiaddr.Multiaddr) Options {
 						Error("Unable to bootstrap KAD-DHT")
 					return
 				}
-				n.pubsubOpts = append(n.pubsubOpts, pubsub.WithDiscovery(discovery.NewRoutingDiscovery(kadDHT)))
+				n.pubsubOpts = append(n.pubsubOpts, pubsub.WithDiscovery(routing.NewRoutingDiscovery(kadDHT)))
 			case sets.NodeStoppingEvent:
 				if kadDHT == nil {
 					return

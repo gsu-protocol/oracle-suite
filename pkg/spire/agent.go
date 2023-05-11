@@ -23,7 +23,8 @@ import (
 	"net/rpc"
 	"time"
 
-	"github.com/chronicleprotocol/oracle-suite/pkg/ethereum"
+	"github.com/defiweb/go-eth/crypto"
+
 	"github.com/chronicleprotocol/oracle-suite/pkg/httpserver"
 	"github.com/chronicleprotocol/oracle-suite/pkg/log"
 	"github.com/chronicleprotocol/oracle-suite/pkg/price/store"
@@ -45,7 +46,6 @@ type Agent struct {
 type AgentConfig struct {
 	PriceStore *store.PriceStore
 	Transport  transport.Transport
-	Signer     ethereum.Signer
 	Address    string
 	Logger     log.Logger
 }
@@ -56,7 +56,7 @@ func NewAgent(cfg AgentConfig) (*Agent, error) {
 	err := rpcSrv.Register(&API{
 		priceStore: cfg.PriceStore,
 		transport:  cfg.Transport,
-		signer:     cfg.Signer,
+		recover:    crypto.ECRecoverer,
 		log:        logger,
 	})
 	if err != nil {
@@ -93,7 +93,7 @@ func (s *Agent) Start(ctx context.Context) error {
 }
 
 // Wait waits until agent's context is cancelled.
-func (s *Agent) Wait() chan error {
+func (s *Agent) Wait() <-chan error {
 	return s.srv.Wait()
 }
 

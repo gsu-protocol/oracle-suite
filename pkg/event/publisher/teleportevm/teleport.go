@@ -18,10 +18,13 @@ package teleportevm
 import (
 	"context"
 	"errors"
+	"math/big"
 	"time"
 
-	"github.com/chronicleprotocol/oracle-suite/pkg/ethereumv2"
-	"github.com/chronicleprotocol/oracle-suite/pkg/ethereumv2/types"
+	"github.com/defiweb/go-eth/types"
+
+	"github.com/chronicleprotocol/oracle-suite/pkg/ethereum"
+	"github.com/chronicleprotocol/oracle-suite/pkg/util/bn"
 
 	"github.com/chronicleprotocol/oracle-suite/pkg/log"
 	"github.com/chronicleprotocol/oracle-suite/pkg/log/null"
@@ -37,24 +40,33 @@ const LoggerTag = "ETHEREUM_TELEPORT"
 const retryInterval = 5 * time.Second
 
 // teleportTopic0 is Keccak256("TeleportInitialized((bytes32,bytes32,bytes32,bytes32,uint128,uint80,uint48))")
-var teleportTopic0 = types.HexToHash("0x61aedca97129bac4264ec6356bd1f66431e65ab80e2d07b7983647d72776f545")
+var teleportTopic0 = types.MustHashFromHex(
+	"0x61aedca97129bac4264ec6356bd1f66431e65ab80e2d07b7983647d72776f545",
+	types.PadNone,
+)
 
 // Config contains a configuration options for EventProvider.
 type Config struct {
 	// Client is an instance of Ethereum RPC client.
-	Client ethereumv2.Client
+	Client ethereum.Client //nolint:staticcheck // deprecated
+
 	// Addresses is a list of contracts from which logs will be fetched.
 	Addresses []types.Address
+
 	// Interval specifies how often provider should check for new logs.
 	Interval time.Duration
+
 	// PrefetchPeriod specifies how far back in time provider should prefetch
 	// logs. It is used only during the initial start of the provider.
 	PrefetchPeriod time.Duration
+
 	// BlockLimit specifies how from many blocks logs can be fetched at once.
 	BlockLimit uint64
+
 	// BlockConfirmations specifies how many blocks should be confirmed before
 	// fetching logs.
 	BlockConfirmations uint64
+
 	// Logger is a current logger interface used by the EventProvider.
 	Logger log.Logger
 }
@@ -79,7 +91,7 @@ type EventProvider struct {
 	eventCh chan *messages.Event
 
 	// Configuration parameters copied from Config:
-	client         ethereumv2.Client
+	client         ethereum.Client //nolint:staticcheck // deprecated
 	addresses      []types.Address
 	interval       time.Duration
 	prefetchPeriod time.Duration
@@ -146,21 +158,18 @@ func (ep *EventProvider) prefetchEventsRoutine(ctx context.Context) {
 		return // Context was canceled.
 	}
 	for d := ep.blockConfirms; ctx.Err() == nil; d += ep.blockLimit {
-		var from, to uint64
-		// Because all integer are unsigned, we need to check against
-		// underflow.
-		if d+ep.blockLimit-1 > latestBlock {
-			from = 0
-		} else {
-			from = latestBlock - (d + ep.blockLimit - 1)
+		from := bn.Int(latestBlock).Sub(d + ep.blockLimit - 1)
+		to := bn.Int(latestBlock).Sub(d)
+		if from.Sign() < 0 {
+			from = bn.Int(0)
 		}
-		to = latestBlock - d
+
 		ep.handleEvents(ctx, from, to)
 		ts, ok := ep.getBlockTimestamp(ctx, to)
 		if !ok {
 			return // Context was canceled.
 		}
-		if from == 0 || time.Since(ts) > ep.prefetchPeriod {
+		if from.Sign() == 0 || time.Since(ts) > ep.prefetchPeriod {
 			return // End of the prefetch period reached.
 		}
 	}
@@ -184,12 +193,17 @@ func (ep *EventProvider) fetchEventsRoutine(ctx context.Context) {
 			if !ok {
 				return // Context was canceled.
 			}
-			if currentBlock <= latestBlock {
-				continue // There is no new blocks.
+			if currentBlock.Cmp(latestBlock) <= 0 {
+				continue // There are no new blocks.
 			}
-			for _, b := range splitBlockRanges(latestBlock+1, currentBlock, ep.blockLimit) {
-				from := b[0] - ep.blockConfirms
-				to := b[1] - ep.blockConfirms
+			ranges := splitBlockRanges(
+				bn.Int(latestBlock).Add(bn.Int(1)),
+				bn.Int(currentBlock),
+				bn.Int(ep.blockLimit),
+			)
+			for _, b := range ranges {
+				from := b[0].Sub(bn.Int(ep.blockConfirms))
+				to := b[1].Sub(bn.Int(ep.blockConfirms))
 				ep.handleEvents(ctx, from, to)
 			}
 			latestBlock = currentBlock
@@ -199,7 +213,7 @@ func (ep *EventProvider) fetchEventsRoutine(ctx context.Context) {
 
 // handleEvents fetches TeleportGUID events from the given block range and
 // sends them to the eventCh channel.
-func (ep *EventProvider) handleEvents(ctx context.Context, from, to uint64) {
+func (ep *EventProvider) handleEvents(ctx context.Context, from, to *bn.IntNumber) {
 	for _, address := range ep.addresses {
 		ep.log.
 			WithFields(log.Fields{
@@ -214,6 +228,7 @@ func (ep *EventProvider) handleEvents(ctx context.Context, from, to uint64) {
 		}
 		for _, l := range logs {
 			if l.Address != address {
+				// PANIC!
 				// This should never happen. All logs returned by
 				// eth_filterLogs should be emitted by the specified
 				// contract. If it happens, there is a bug somewhere.
@@ -232,7 +247,7 @@ func (ep *EventProvider) handleEvents(ctx context.Context, from, to uint64) {
 						"address":     l.Address.String(),
 						"blockNumber": l.BlockNumber,
 						"blockHash":   l.BlockHash.String(),
-						"txHash":      l.TxHash.String(),
+						"txHash":      l.TransactionHash.String(),
 					}).
 					Warn("Received removed log")
 				continue
@@ -255,9 +270,9 @@ func (ep *EventProvider) handleEvents(ctx context.Context, from, to uint64) {
 // The only way to stop this method from trying again is to cancel the
 // context. In that case, the method will return false as a second return
 // value.
-func (ep *EventProvider) getBlockNumber(ctx context.Context) (uint64, bool) {
+func (ep *EventProvider) getBlockNumber(ctx context.Context) (*big.Int, bool) {
 	var err error
-	var res uint64
+	var res *big.Int
 	retry.TryForever(
 		ctx,
 		func() error {
@@ -270,7 +285,7 @@ func (ep *EventProvider) getBlockNumber(ctx context.Context) (uint64, bool) {
 		retryInterval,
 	)
 	if ctx.Err() != nil {
-		return 0, false
+		return nil, false
 	}
 	return res, true
 }
@@ -281,13 +296,13 @@ func (ep *EventProvider) getBlockNumber(ctx context.Context) (uint64, bool) {
 // The only way to stop this method from trying again is to cancel the
 // context. In that case, the method will return false as a second return
 // value.
-func (ep *EventProvider) getBlockTimestamp(ctx context.Context, block uint64) (time.Time, bool) {
+func (ep *EventProvider) getBlockTimestamp(ctx context.Context, block *bn.IntNumber) (time.Time, bool) {
 	var err error
 	var res any
 	retry.TryForever(
 		ctx,
 		func() error {
-			res, err = ep.client.BlockByNumber(ctx, types.Uint64ToBlockNumber(block))
+			res, err = ep.client.Block(ethereum.WithBlockNumber(ctx, block.BigInt()))
 			if err != nil {
 				ep.log.WithError(err).Error("Unable to get block timestamp")
 			}
@@ -298,11 +313,7 @@ func (ep *EventProvider) getBlockTimestamp(ctx context.Context, block uint64) (t
 	if res == nil || ctx.Err() != nil {
 		return time.Time{}, false
 	}
-	if res, ok := res.(*types.BlockTxHashes); ok {
-		return time.Unix(res.Timestamp.Big().Int64(), 0), true
-	}
-	ep.log.Panic("BlockByNumber returned unexpected type")
-	return time.Time{}, true
+	return res.(*types.Block).Timestamp, true
 }
 
 // filterLogs fetches TeleportGUID events from the blockchain.
@@ -314,7 +325,7 @@ func (ep *EventProvider) getBlockTimestamp(ctx context.Context, block uint64) (t
 func (ep *EventProvider) filterLogs(
 	ctx context.Context,
 	addr types.Address,
-	from, to uint64,
+	from, to *bn.IntNumber,
 	topic0 types.Hash,
 ) ([]types.Log, bool) {
 
@@ -323,13 +334,13 @@ func (ep *EventProvider) filterLogs(
 	retry.TryForever(
 		ctx,
 		func() error {
-			fromBlockNumber := types.Uint64ToBlockNumber(from)
-			toBlockNumber := types.Uint64ToBlockNumber(to)
+			fromBlockNumber := types.BlockNumberFromBigInt(from.BigInt())
+			toBlockNumber := types.BlockNumberFromBigInt(to.BigInt())
 			res, err = ep.client.FilterLogs(ctx, types.FilterLogsQuery{
 				FromBlock: &fromBlockNumber,
 				ToBlock:   &toBlockNumber,
-				Address:   types.Addresses{addr},
-				Topics:    []types.Hashes{{topic0}},
+				Address:   []types.Address{addr},
+				Topics:    [][]types.Hash{{topic0}},
 			})
 			if err != nil {
 				ep.log.WithError(err).Error("Unable to filter logs")
@@ -348,23 +359,23 @@ func (ep *EventProvider) filterLogs(
 // "limit" blocks. Some RPC providers have a limit on the number of blocks
 // that can be fetched in a single request and this method is used to
 // keep the number of blocks in each request below that limit.
-func splitBlockRanges(from, to, limit uint64) [][2]uint64 {
-	if from > to {
+func splitBlockRanges(from, to, limit *bn.IntNumber) [][2]*bn.IntNumber {
+	if from.Cmp(to) > 0 {
 		return nil
 	}
-	if to-from <= limit {
-		return [][2]uint64{{from, to}}
+	if to.Sub(from).Cmp(limit) <= 0 {
+		return [][2]*bn.IntNumber{{from, to}}
 	}
-	var ranges [][2]uint64
+	var ranges [][2]*bn.IntNumber
 	rangeFrom := from
 	rangeTo := from
-	for rangeTo < to {
-		rangeTo = rangeFrom + limit - 1
-		if rangeTo > to {
+	for rangeTo.Cmp(to) < 0 {
+		rangeTo = rangeFrom.Add(limit).Sub(bn.Int(1))
+		if rangeTo.Cmp(to) > 0 {
 			rangeTo = to
 		}
-		ranges = append(ranges, [2]uint64{rangeFrom, rangeTo})
-		rangeFrom = rangeTo + 1
+		ranges = append(ranges, [2]*bn.IntNumber{rangeFrom, rangeTo})
+		rangeFrom = rangeTo.Add(bn.Int(1))
 	}
 	return ranges
 }

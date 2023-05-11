@@ -20,7 +20,9 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/chronicleprotocol/oracle-suite/pkg/ethereum"
+	"github.com/defiweb/go-eth/types"
+
+	"github.com/chronicleprotocol/oracle-suite/pkg/config/ethereum"
 	ethereumMocks "github.com/chronicleprotocol/oracle-suite/pkg/ethereum/mocks"
 
 	"github.com/stretchr/testify/assert"
@@ -44,27 +46,31 @@ func TestPostPriceHook(t *testing.T) {
 		},
 	}
 
-	contract := "0xdeadbeef"
+	contract := "0x0011223344556677889900112233445566778899"
 	params := make(map[string]interface{})
-	params["circuitContract"] = contract
+	params["circuit_contract"] = contract
+	params["ethereum_client"] = "default"
 	pairParams := NewHookParams()
 	pairParams["RETH/ETH"] = params
 
-	cli := &ethereumMocks.Client{}
+	cli := &ethereumMocks.RPC{}
 	readMethodID := []byte{87, 222, 38, 164}
 	divisorMethodID := []byte{31, 45, 197, 239}
 
 	ctx := context.Background()
-	cli.On("Call", ctx, ethereum.Call{Address: ethereum.HexToAddress(contract), Data: readMethodID}).Return(
+	cli.On("Call", ctx, types.Call{To: types.MustAddressFromHexPtr(contract), Input: readMethodID}, types.LatestBlockNumber).Return(
 		[]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 39, 16},
 		nil,
 	)
-	cli.On("Call", ctx, ethereum.Call{Address: ethereum.HexToAddress(contract), Data: divisorMethodID}).Return(
+	cli.On("Call", ctx, types.Call{To: types.MustAddressFromHexPtr(contract), Input: divisorMethodID}, types.LatestBlockNumber).Return(
 		[]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 134, 160},
 		nil,
 	)
 
-	hook, err := NewPostPriceHook(context.Background(), cli, pairParams)
+	clients := ethereum.ClientRegistry{
+		"default": cli,
+	}
+	hook, err := NewPostPriceHook(context.Background(), clients, pairParams)
 	assert.NoError(t, err)
 
 	// Moderate price deviation, expect success

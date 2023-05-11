@@ -24,12 +24,12 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/chronicleprotocol/oracle-suite/pkg/price/median"
 	"github.com/chronicleprotocol/oracle-suite/pkg/price/store/testutil"
 	"github.com/chronicleprotocol/oracle-suite/pkg/util/errutil"
 
 	"github.com/chronicleprotocol/oracle-suite/pkg/ethereum/mocks"
 	"github.com/chronicleprotocol/oracle-suite/pkg/log/null"
-	"github.com/chronicleprotocol/oracle-suite/pkg/price/oracle"
 	"github.com/chronicleprotocol/oracle-suite/pkg/transport"
 	"github.com/chronicleprotocol/oracle-suite/pkg/transport/local"
 	"github.com/chronicleprotocol/oracle-suite/pkg/transport/messages"
@@ -39,12 +39,11 @@ func TestStore(t *testing.T) {
 	ctx, ctxCancel := context.WithCancel(context.Background())
 	defer ctxCancel()
 
-	sig := &mocks.Signer{}
+	rec := &mocks.Recoverer{}
 	tra := local.New([]byte("test"), 0, map[string]transport.Message{messages.PriceV0MessageName: (*messages.Price)(nil)})
 	_ = tra.Start(ctx)
 
 	ps, err := New(Config{
-		Signer:    sig,
 		Storage:   NewMemoryStorage(),
 		Transport: tra,
 		Pairs:     []string{"AAABBB", "XXXYYY"},
@@ -52,11 +51,12 @@ func TestStore(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NoError(t, ps.Start(ctx))
+	ps.recover = rec
 
-	sig.On("Recover", testutil.PriceAAABBB1.Price.Signature(), mock.Anything).Return(&testutil.Address1, nil)
-	sig.On("Recover", testutil.PriceAAABBB2.Price.Signature(), mock.Anything).Return(&testutil.Address2, nil)
-	sig.On("Recover", testutil.PriceXXXYYY1.Price.Signature(), mock.Anything).Return(&testutil.Address1, nil)
-	sig.On("Recover", testutil.PriceXXXYYY2.Price.Signature(), mock.Anything).Return(&testutil.Address2, nil)
+	rec.On("RecoverMessage", mock.Anything, testutil.PriceAAABBB1.Price.Sig).Return(&testutil.Address1, nil)
+	rec.On("RecoverMessage", mock.Anything, testutil.PriceAAABBB2.Price.Sig).Return(&testutil.Address2, nil)
+	rec.On("RecoverMessage", mock.Anything, testutil.PriceXXXYYY1.Price.Sig).Return(&testutil.Address1, nil)
+	rec.On("RecoverMessage", mock.Anything, testutil.PriceXXXYYY2.Price.Sig).Return(&testutil.Address2, nil)
 
 	assert.NoError(t, tra.Broadcast(messages.PriceV0MessageName, testutil.PriceAAABBB1))
 	assert.NoError(t, tra.Broadcast(messages.PriceV0MessageName, testutil.PriceAAABBB2))
@@ -80,8 +80,8 @@ func TestStore(t *testing.T) {
 	assert.Contains(t, toOraclePrices(xxxyyy), testutil.PriceXXXYYY2.Price)
 }
 
-func toOraclePrices(ps []*messages.Price) []*oracle.Price {
-	var r []*oracle.Price
+func toOraclePrices(ps []*messages.Price) []*median.Price {
+	var r []*median.Price
 	for _, p := range ps {
 		r = append(r, p.Price)
 	}

@@ -20,7 +20,8 @@ import (
 	"errors"
 	"net/rpc"
 
-	"github.com/chronicleprotocol/oracle-suite/pkg/ethereum"
+	"github.com/defiweb/go-eth/wallet"
+
 	"github.com/chronicleprotocol/oracle-suite/pkg/transport/messages"
 )
 
@@ -30,11 +31,11 @@ type Client struct {
 
 	rpc    *rpc.Client
 	addr   string
-	signer ethereum.Signer
+	signer wallet.Key
 }
 
 type ClientConfig struct {
-	Signer  ethereum.Signer
+	Signer  wallet.Key
 	Address string
 }
 
@@ -61,7 +62,7 @@ func (c *Client) Start(ctx context.Context) error {
 }
 
 // Wait waits until the context is canceled or until an error occurs.
-func (c *Client) Wait() chan error {
+func (c *Client) Wait() <-chan error {
 	return c.waitCh
 }
 

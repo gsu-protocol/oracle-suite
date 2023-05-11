@@ -44,10 +44,13 @@ type Config struct {
 	// EventTypes is a list of supported event types. Events of other types will
 	// be ignored.
 	EventTypes []string
+
 	// Storage is the storage implementation.
 	Storage Storage
+
 	// Transport is a transport interface used to fetch events from Oracles.
 	Transport transport.Transport
+
 	// Logger is a current logger interface used by the EventStore.
 	// The Logger is required to monitor asynchronous processes.
 	Logger log.Logger
@@ -59,6 +62,7 @@ type Storage interface {
 	// updated if the MessageDate is newer. The first argument is true if the
 	// event was added, false if it was replaced. The method is thread-safe.
 	Add(ctx context.Context, author []byte, evt *messages.Event) (bool, error)
+
 	// Get returns messages form the store for the given type and index. If the
 	// message does not exist, nil will be returned. The method is thread-safe.
 	Get(ctx context.Context, typ string, idx []byte) ([]*messages.Event, error)
@@ -99,7 +103,7 @@ func (e *EventStore) Start(ctx context.Context) error {
 }
 
 // Wait waits until the context is canceled or until an error occurs.
-func (e *EventStore) Wait() chan error {
+func (e *EventStore) Wait() <-chan error {
 	return e.waitCh
 }
 
@@ -109,11 +113,12 @@ func (e *EventStore) Events(ctx context.Context, typ string, idx []byte) ([]*mes
 }
 
 func (e *EventStore) eventCollectorRoutine() {
+	msgCh := e.transport.Messages(messages.EventV1MessageName)
 	for {
 		select {
 		case <-e.ctx.Done():
 			return
-		case msg := <-e.transport.Messages(messages.EventV1MessageName):
+		case msg := <-msgCh:
 			if msg.Error != nil {
 				e.log.WithError(msg.Error).Error("Unable to read events from the transport layer")
 				continue
